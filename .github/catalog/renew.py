@@ -155,10 +155,16 @@ def plan(folder, force):
             raise ValueError("Release tag or target list mismatch")
         for name, target in targets.targets.items():
             info = target.custom
-            if (info["product"], info["version"], info["channel"], name) != (
-                    "device-tools", version, "stable", f"Device_Tools-{info['platform']}.zip"):
+            target_version = info["version"]
+            if (info["product"], info["channel"], name) != (
+                    "device-tools", "stable", f"Device_Tools-{info['platform']}.zip"):
                 raise ValueError("Invalid release identity")
-            notes.add(info["notes"])
+            if (not re.fullmatch(r"\d+\.\d+\.\d+", target_version)
+                    or tuple(map(int, target_version.split("."))) > tuple(map(int, version.split(".")))
+                    or not isinstance(info["notes"], str) or not info["notes"].strip()):
+                raise ValueError("Invalid target version or release notes")
+            if target_version == version:
+                notes.add(info["notes"])
         if len(notes) != 1:
             raise ValueError("Inconsistent release notes")
         body = notes.pop() + f"\n\n[下载 V{version}]({WEB}/releases/tag/V{version})"
