@@ -1,2 +1,13 @@
-# Amazfit-device-tools-releases
-Amazfit Device Tools desktop releases, release notes and signed update metadata.
+# Amazfit Device Tools
+
+打开[最新发布](https://github.com/StoneTang1981/Amazfit-device-tools-releases/releases/latest)查看中文更新说明，选择与你的电脑匹配的程序包。下载和软件内检查更新均可匿名使用。
+
+| 电脑 | 程序包 |
+|---|---|
+| Windows x64 | Device_Tools-windows-amd64.zip |
+| Mac Apple Silicon（M 系列） | Device_Tools-macos-arm64.zip |
+| Mac Intel | Device_Tools-macos-x86_64.zip |
+
+首次安装请先解压，再打开 Device_Tools.exe 或 Device_Tools.app。从 V1.1 升级时，手动安装一次 V1.2 即可。此后打开 Device Tools 会自动检查新版，也可以在侧栏「版本与更新」手动检查。
+
+程序会自动读取签名清单并验证下载内容。首次打开应用和访问钥匙串时，请按系统提示及所在组织的软件策略操作。
