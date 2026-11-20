@@ -1,0 +1,45 @@
+name: Renew Device Tools update catalog
+on:
+  schedule:
+    - cron: '27 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Renew now even if the current timestamp is fresh
+        type: boolean
+        default: false
+
+permissions: {}
+concurrency:
+  group: official-update-catalog
+  cancel-in-progress: false
+
+jobs:
+  renew:
+    if: github.repository == 'StoneTang1981/Amazfit-device-tools-releases' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: catalog-renewal
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install verified signing dependencies
+        run: |
+          /usr/bin/python3.12 -m venv "$RUNNER_TEMP/signer"
+          "$RUNNER_TEMP/signer/bin/python" -m pip install --disable-pip-version-check --no-deps --require-hashes --only-binary=:all: --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 --target "$RUNNER_TEMP/signer-libs" -r .github/catalog/requirements.txt
+      - name: Verify and renew the signed catalog
+        env:
+          TUF_SNAPSHOT_KEY: ${{ secrets.TUF_SNAPSHOT_KEY }}
+          TUF_TIMESTAMP_KEY: ${{ secrets.TUF_TIMESTAMP_KEY }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set --
+          if [[ "$FORCE" == "true" ]]; then set -- --force; fi
+          PYTHONPATH="$RUNNER_TEMP/signer-libs" "$RUNNER_TEMP/signer/bin/python" .github/catalog/renew.py plan "$RUNNER_TEMP/catalog" "$@"
+      - name: Publish and verify the anonymous feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH="$RUNNER_TEMP/signer-libs" "$RUNNER_TEMP/signer/bin/python" .github/catalog/renew.py publish "$RUNNER_TEMP/catalog"
