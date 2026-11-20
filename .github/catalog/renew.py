@@ -85,6 +85,49 @@ def state_matches(plan):
         raise ValueError("Stable release changed; rerun against the new catalog")
 
 
+def next_check(now):
+    # UTC primary schedule, including the short interval across some month ends.
+    check = now.replace(hour=2, minute=27, second=0, microsecond=0)
+    while check <= now or check.day not in (1, 7, 13, 19, 25, 31):
+        check += timedelta(days=1)
+    return check
+
+
+def annual_target(raw, now, directory=Path("authorizations")):
+    current = Metadata.from_bytes(raw)
+    ROOT.verify_delegate("targets", current)
+    active = current.signed
+    source = active.unrecognized_fields.get("x-renewal-source", hashlib.sha256(raw).hexdigest())
+    if not isinstance(source, str) or not re.fullmatch("[0-9a-f]{64}", source):
+        raise ValueError("Invalid annual authorization reference")
+    def identity(role):
+        return {k: v for k, v in role.to_dict().items() if k not in ("version", "expires", "x-renewal-source")}
+    expected = identity(active)
+    horizon = min(now + timedelta(days=30), ROOT.signed.expires)
+    selected = raw
+    expiry = active.expires
+    revision = active.version
+    for envelope in json.loads((directory / (source + ".json")).read_bytes()):
+        successor = Metadata.from_dict(envelope)
+        ROOT.verify_delegate("targets", successor)
+        role = successor.signed
+        if (role.unrecognized_fields.get("x-renewal-source") != source or identity(role) != expected
+                or role.expires > ROOT.signed.expires):
+            raise ValueError("Annual authorization changed the approved release")
+        if role.version <= active.version:
+            if role.version == active.version and successor.to_bytes() != raw:
+                raise ValueError("Conflicting annual authorization")
+            continue
+        if (role.version != revision + 1 or not expiry < role.expires <= expiry + timedelta(days=335)):
+            raise ValueError("Nonconsecutive annual authorizations")
+        revision, expiry = role.version, role.expires
+        if selected == raw and active.expires < horizon <= expiry:
+            selected = successor.to_bytes()
+    if expiry < ROOT.signed.expires or (active.expires < horizon and selected == raw):
+        raise ValueError("Incomplete annual authorizations")
+    return selected
+
+
 def plan(folder, force):
     release = json.loads((folder / "latest.json").read_text())
     tag = release["tag_name"]
@@ -100,11 +143,11 @@ def plan(folder, force):
             if role.version < before or (role.version == before and blobs[name] != old_blobs[name]):
                 raise ValueError("Rollback or conflicting metadata revision")
     now = datetime.now(timezone.utc)
-    targets = roles["targets"]
-    if targets.is_expired():
-        raise ValueError("Offline target authorization expired")
-    if targets.expires <= now + timedelta(days=30):
-        print("::warning::Offline target authorization expires " + targets.expires.isoformat())
+    authorized = annual_target(blobs["targets"], now)
+    targets = Metadata.from_bytes(authorized).signed
+    changed = authorized != blobs["targets"]
+    if changed:
+        print("Activated annual authorization through", targets.expires)
     version = match[1]
     notes = set()
     if targets.targets:
@@ -123,24 +166,24 @@ def plan(folder, force):
         body = release["body"] or f"V{version} 已撤回。"
     plan_data = {"id": release["id"], "tag": tag, "digest": hashlib.sha256(raw).hexdigest()}
     output = folder / CATALOG
-    if force or min(roles[n].expires for n in ("timestamp", "snapshot")) <= now + timedelta(days=3):
-        rev = max(int(now.timestamp()), 1 + max(r.version for r in roles.values()))
+    if force or changed or min(roles[n].expires for n in ("timestamp", "snapshot")) <= next_check(now) + timedelta(hours=12):
+        rev = max(int(now.timestamp()), targets.version + 1, 1 + max(r.version for r in roles.values()))
         def sign(name, signed):
             key = CryptoSigner(load_pem_private_key(os.environ[f"TUF_{name.upper()}_KEY"].encode(), password=None))
             result = Metadata(signed)
             result.sign(key)
             ROOT.verify_delegate(name, result)
             return result.to_bytes()
-        ref = MetaFile.from_data(targets.version, blobs["targets"], ["sha256"])
+        ref = MetaFile.from_data(targets.version, authorized, ["sha256"])
         snap = sign("snapshot", Snapshot(version=rev, expires=now + timedelta(days=30), meta={"targets.json": ref}))
         ts = sign("timestamp", Timestamp(version=rev, expires=now + timedelta(days=7),
                                         snapshot_meta=MetaFile.from_data(rev, snap, ["sha256"])))
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr(f"{targets.version}.targets.json", blobs["targets"])
+            archive.writestr(f"{targets.version}.targets.json", authorized)
             archive.writestr(f"{rev}.snapshot.json", snap)
             archive.writestr("timestamp.json", ts)
         signed, checked = verify(output.read_bytes())
-        if signed["timestamp"].is_expired() or checked["targets"] != blobs["targets"]:
+        if signed["timestamp"].is_expired() or checked["targets"] != authorized:
             raise ValueError("Invalid renewal")
         plan_data["candidate"] = f"V{version}-feed.{rev}"
         (folder / "notes.md").write_text(body, encoding="utf-8")

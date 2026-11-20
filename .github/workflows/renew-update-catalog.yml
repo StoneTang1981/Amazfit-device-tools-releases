@@ -1,7 +1,8 @@
 name: Renew Device Tools update catalog
 on:
   schedule:
-    - cron: '27 2 * * *'
+    # Morning check and an independent evening recovery opportunity, UTC.
+    - cron: '27 2,14 1,7,13,19,25,31 * *'
   workflow_dispatch:
     inputs:
       force:
