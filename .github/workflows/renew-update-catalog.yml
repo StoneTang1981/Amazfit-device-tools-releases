@@ -30,6 +30,12 @@ jobs:
         run: |
           /usr/bin/python3.12 -m venv "$RUNNER_TEMP/signer"
           "$RUNNER_TEMP/signer/bin/python" -m pip install --disable-pip-version-check --no-deps --require-hashes --only-binary=:all: --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 --target "$RUNNER_TEMP/signer-libs" -r .github/catalog/requirements.txt
+      - name: Read stable release information
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/catalog"
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/catalog/latest.json"
       - name: Verify and renew the signed catalog
         env:
           TUF_SNAPSHOT_KEY: ${{ secrets.TUF_SNAPSHOT_KEY }}

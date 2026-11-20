@@ -19,7 +19,6 @@ from tuf.api.metadata import Metadata, MetaFile, Snapshot, Timestamp
 
 REPO = "StoneTang1981/Amazfit-device-tools-releases"
 WEB = "https://github.com/" + REPO
-API = "https://api.github.com/repos/" + REPO
 CATALOG = "device-tools-update-metadata.zip"
 LIMIT = 2 * 1024 * 1024
 CHECKPOINT = Path("stable") / CATALOG
@@ -37,7 +36,7 @@ def read(url):
 
 
 def latest():
-    return json.loads(read(f"{API}/releases/latest?check={time.time_ns()}"))
+    return json.loads(gh("api", f"repos/{REPO}/releases/latest?check={time.time_ns()}"))
 
 
 def download(tag):
@@ -87,7 +86,7 @@ def state_matches(plan):
 
 
 def plan(folder, force):
-    release = latest()
+    release = json.loads((folder / "latest.json").read_text())
     tag = release["tag_name"]
     match = re.fullmatch(r"V(\d+\.\d+\.\d+)(?:-(feed|withdraw)\.\d+)?", tag)
     if not match or release["draft"] or release["prerelease"]:
