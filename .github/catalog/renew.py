@@ -128,6 +128,29 @@ def annual_target(raw, now, directory=Path("authorizations")):
     return selected
 
 
+def sign_online(output, roles, authorized, now):
+    targets = Metadata.from_bytes(authorized).signed
+    rev = max(int(now.timestamp()), targets.version + 1, 1 + max(r.version for r in roles.values()))
+    def sign(name, signed):
+        key = CryptoSigner(load_pem_private_key(os.environ[f"TUF_{name.upper()}_KEY"].encode(), password=None))
+        result = Metadata(signed)
+        result.sign(key)
+        ROOT.verify_delegate(name, result)
+        return result.to_bytes()
+    ref = MetaFile.from_data(targets.version, authorized, ["sha256"])
+    snap = sign("snapshot", Snapshot(version=rev, expires=now + timedelta(days=30), meta={"targets.json": ref}))
+    ts = sign("timestamp", Timestamp(version=rev, expires=now + timedelta(days=7),
+                                    snapshot_meta=MetaFile.from_data(rev, snap, ["sha256"])))
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{targets.version}.targets.json", authorized)
+        archive.writestr(f"{rev}.snapshot.json", snap)
+        archive.writestr("timestamp.json", ts)
+    signed, checked = verify(output.read_bytes())
+    if signed["timestamp"].is_expired() or checked["targets"] != authorized:
+        raise ValueError("Invalid renewal")
+    return rev, signed
+
+
 def plan(folder, force):
     release = json.loads((folder / "latest.json").read_text())
     tag = release["tag_name"]
@@ -173,24 +196,7 @@ def plan(folder, force):
     plan_data = {"id": release["id"], "tag": tag, "digest": hashlib.sha256(raw).hexdigest()}
     output = folder / CATALOG
     if force or changed or min(roles[n].expires for n in ("timestamp", "snapshot")) <= next_check(now) + timedelta(hours=12):
-        rev = max(int(now.timestamp()), targets.version + 1, 1 + max(r.version for r in roles.values()))
-        def sign(name, signed):
-            key = CryptoSigner(load_pem_private_key(os.environ[f"TUF_{name.upper()}_KEY"].encode(), password=None))
-            result = Metadata(signed)
-            result.sign(key)
-            ROOT.verify_delegate(name, result)
-            return result.to_bytes()
-        ref = MetaFile.from_data(targets.version, authorized, ["sha256"])
-        snap = sign("snapshot", Snapshot(version=rev, expires=now + timedelta(days=30), meta={"targets.json": ref}))
-        ts = sign("timestamp", Timestamp(version=rev, expires=now + timedelta(days=7),
-                                        snapshot_meta=MetaFile.from_data(rev, snap, ["sha256"])))
-        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr(f"{targets.version}.targets.json", authorized)
-            archive.writestr(f"{rev}.snapshot.json", snap)
-            archive.writestr("timestamp.json", ts)
-        signed, checked = verify(output.read_bytes())
-        if signed["timestamp"].is_expired() or checked["targets"] != authorized:
-            raise ValueError("Invalid renewal")
+        rev, signed = sign_online(output, roles, authorized, now)
         plan_data["candidate"] = f"V{version}-feed.{rev}"
         (folder / "notes.md").write_text(body, encoding="utf-8")
         print("Prepared", plan_data["candidate"], "valid through", signed["timestamp"].expires)

@@ -5,6 +5,10 @@ on:
     - cron: '27 2,14 1,7,13,19,25,31 * *'
   workflow_dispatch:
     inputs:
+      plugin_only:
+        description: Check only the map plugin catalog
+        type: boolean
+        default: false
       force:
         description: Renew now even if the current timestamp is fresh
         type: boolean
@@ -32,12 +36,14 @@ jobs:
           /usr/bin/python3.12 -m venv "$RUNNER_TEMP/signer"
           "$RUNNER_TEMP/signer/bin/python" -m pip install --disable-pip-version-check --no-deps --require-hashes --only-binary=:all: --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 --target "$RUNNER_TEMP/signer-libs" -r .github/catalog/requirements.txt
       - name: Read stable release information
+        if: ${{ !inputs.plugin_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/catalog"
           gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/catalog/latest.json"
       - name: Verify and renew the signed catalog
+        if: ${{ !inputs.plugin_only }}
         env:
           TUF_SNAPSHOT_KEY: ${{ secrets.TUF_SNAPSHOT_KEY }}
           TUF_TIMESTAMP_KEY: ${{ secrets.TUF_TIMESTAMP_KEY }}
@@ -47,6 +53,23 @@ jobs:
           if [[ "$FORCE" == "true" ]]; then set -- --force; fi
           PYTHONPATH="$RUNNER_TEMP/signer-libs" "$RUNNER_TEMP/signer/bin/python" .github/catalog/renew.py plan "$RUNNER_TEMP/catalog" "$@"
       - name: Publish and verify the anonymous feed
+        if: ${{ !inputs.plugin_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: PYTHONPATH="$RUNNER_TEMP/signer-libs" "$RUNNER_TEMP/signer/bin/python" .github/catalog/renew.py publish "$RUNNER_TEMP/catalog"
+      - name: Verify and renew the signed plugin catalog
+        id: plugin_plan
+        if: ${{ !cancelled() }}
+        env:
+          TUF_SNAPSHOT_KEY: ${{ secrets.TUF_SNAPSHOT_KEY }}
+          TUF_TIMESTAMP_KEY: ${{ secrets.TUF_TIMESTAMP_KEY }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set --
+          if [[ "$FORCE" == "true" ]]; then set -- --force; fi
+          PYTHONPATH="$RUNNER_TEMP/signer-libs" "$RUNNER_TEMP/signer/bin/python" .github/catalog/renew_plugins.py plan "$RUNNER_TEMP/plugin-catalog" "$@"
+      - name: Publish and verify the anonymous plugin feed
+        if: ${{ !cancelled() && steps.plugin_plan.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH="$RUNNER_TEMP/signer-libs" "$RUNNER_TEMP/signer/bin/python" .github/catalog/renew_plugins.py publish "$RUNNER_TEMP/plugin-catalog"
